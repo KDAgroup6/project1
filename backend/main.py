@@ -4,6 +4,7 @@ import os
 load_dotenv(override=True)
 
 from pathlib import Path
+from typing import Literal, Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,8 +39,49 @@ SYSTEM_PROMPT = f"""당신은 LG 트윈스 야구 경기 직관을 준비하는 
 위 사실에 없는 내용(좌석 잔여 수량, 가격, 실시간 예매 현황 등)은 모른다고 답하고, 공식 사이트 확인을 안내하세요."""
 
 
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class BookingQuestion(BaseModel):
     message: str
+    history: list[ChatTurn] = []
+
+
+class Visual(BaseModel):
+    type: Literal["none", "seat_zone", "booking_steps"]
+    zone: Optional[Literal["infield", "outfield", "cheer"]] = None
+
+
+class BookingAnswer(BaseModel):
+    answer: str
+    visual: Visual
+
+
+ANSWER_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "answer": {"type": "string"},
+        "visual": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "enum": ["none", "seat_zone", "booking_steps"],
+                },
+                "zone": {
+                    "type": ["string", "null"],
+                    "enum": ["infield", "outfield", "cheer", None],
+                },
+            },
+            "required": ["type", "zone"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["answer", "visual"],
+    "additionalProperties": False,
+}
 
 
 @app.post("/booking-help")
