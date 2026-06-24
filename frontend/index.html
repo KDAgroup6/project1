@@ -56,6 +56,48 @@
   button {
     padding: 8px 16px;
   }
+  .visual-card {
+    background: #fafafa;
+    border: 1px solid #eee;
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 10px;
+  }
+  .visual-caption {
+    font-size: 13px;
+    margin: 6px 0 0;
+    text-align: center;
+  }
+  .steps-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .step-item {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+  }
+  .step-number {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #1a73e8;
+    color: white;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .step-title {
+    font-size: 13px;
+    font-weight: bold;
+  }
+  .step-desc {
+    font-size: 12px;
+    color: #555;
+  }
 </style>
 </head>
 <body>
@@ -65,6 +107,7 @@
     <input id="message" type="text" placeholder="예: LG 경기 어디서 예매해?" autocomplete="off" />
     <button type="submit">전송</button>
   </form>
+  <script src="visuals.js"></script>
   <script src="script.js"></script>
 </body>
 </html>
