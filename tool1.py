@@ -34,9 +34,12 @@ WEEKDAY_NUMBERS = {
 }
 RELATIVE_DAYS = {
     "그제": -2,
+    "그저께": -2,
+    "엊그제": -2,
     "어제": -1,
     "오늘": 0,
     "내일": 1,
+    "낼모레": 2,
     "모레": 2,
 }
 
@@ -221,6 +224,19 @@ def get_games_by_date(game_date: str) -> list[sqlite3.Row]:
         ).fetchall()
 
 
+def get_games_in_range(start_date: str, end_date: str) -> list[sqlite3.Row]:
+    with connect_db() as conn:
+        return conn.execute(
+            """
+            SELECT *
+            FROM games
+            WHERE game_date BETWEEN ? AND ?
+            ORDER BY game_date, game_time, gmkey
+            """,
+            (start_date, end_date),
+        ).fetchall()
+
+
 def format_game(row: sqlite3.Row) -> str:
     home_or_away = "홈" if row["is_home"] else "원정"
     double_header = ", 더블헤더" if row["dheader"] in ("1", "2") else ""
@@ -259,6 +275,29 @@ def answer_schedule(game_date: str) -> str:
     return "\n".join(lines)
 
 
+def answer_schedule_range(start_date: str, end_date: str, title: str) -> str:
+    if not start_date or not end_date:
+        return "기간을 먼저 확인할 수 없어요."
+
+    games = get_games_in_range(start_date, end_date)
+    if not games:
+        return f"{title}({start_date} ~ {end_date})에는 등록된 LG 트윈스 경기가 없습니다."
+
+    lines = [f"{title}({start_date} ~ {end_date}) LG 트윈스 경기 일정입니다."]
+    current_date = None
+    count = 0
+
+    for game in games:
+        if game["game_date"] != current_date:
+            current_date = game["game_date"]
+            count = 0
+            lines.append(f"\n{current_date}({game['weekday']})")
+        count += 1
+        lines.append(f"[{count}경기]\n{format_game(game)}")
+
+    return "\n".join(lines)
+
+
 def today_kst() -> date:
     return datetime.now(KST).date()
 
@@ -274,6 +313,75 @@ def extract_relative_day(text: str) -> str | None:
     for word, delta in RELATIVE_DAYS.items():
         if word in text:
             return (today_kst() + timedelta(days=delta)).isoformat()
+    return None
+
+
+def week_start_offset(text: str) -> int | None:
+    compact_text = re.sub(r"\s+", "", text)
+    if "다다음주" in compact_text:
+        return 2
+    if "다음주" in compact_text:
+        return 1
+    if "이번주" in compact_text:
+        return 0
+    if "저번주" in compact_text or "지난주" in compact_text:
+        return -1
+    return None
+
+
+def extract_week_range(text: str) -> tuple[str, str, str] | None:
+    compact_text = re.sub(r"\s+", "", text)
+    if re.search(r"(월요일|화요일|수요일|목요일|금요일|토요일|일요일)", compact_text):
+        return None
+
+    offset = week_start_offset(compact_text)
+    if offset is None:
+        return None
+
+    monday = today_kst() - timedelta(days=today_kst().weekday())
+    start = monday + timedelta(days=offset * 7)
+    end = start + timedelta(days=6)
+
+    if "주말" in compact_text:
+        start = start + timedelta(days=5)
+        end = start + timedelta(days=1)
+        title = {
+            2: "다다음주말",
+            1: "다음주말",
+            0: "이번주말",
+            -1: "저번주말",
+        }[offset]
+        return start.isoformat(), end.isoformat(), title
+
+    if "일정" in compact_text or "경기" in compact_text or "모두" in compact_text:
+        title = {
+            2: "다다음주",
+            1: "다음주",
+            0: "이번주",
+            -1: "저번주",
+        }[offset]
+        return start.isoformat(), end.isoformat(), title
+
+    return None
+
+
+def extract_weekend_date(text: str) -> str | None:
+    compact_text = re.sub(r"\s+", "", text)
+    weekend_offsets = {
+        "다다음주말": 2,
+        "다음주말": 1,
+        "이번주말": 0,
+        "저번주말": -1,
+        "지난주말": -1,
+        "주말": 0,
+    }
+
+    for word, week_offset in weekend_offsets.items():
+        if word in compact_text:
+            monday = today_kst() - timedelta(days=today_kst().weekday())
+            saturday = monday + timedelta(days=5 + week_offset * 7)
+            return saturday.isoformat()
+
     return None
 
 
@@ -313,6 +421,14 @@ def extract_date(text: str) -> str | None:
     if relative_date:
         return relative_date
 
+    week_range = extract_week_range(text)
+    if week_range:
+        return week_range[0]
+
+    weekend_date = extract_weekend_date(text)
+    if weekend_date:
+        return weekend_date
+
     weekday_date = extract_weekday_date(text)
     if weekday_date:
         return weekday_date
@@ -330,6 +446,11 @@ def extract_date(text: str) -> str | None:
     return None
 
 
+def extract_range_query(text: str) -> tuple[str, str, str] | None:
+    compact_text = re.sub(r"\s+", "", text)
+    return extract_week_range(compact_text)
+
+
 def select_date_by_dial(index: int, dates: list[str]) -> tuple[str, str, list[dict[str, str]]]:
     if not dates:
         message = "DB에 저장된 일정이 없습니다. 먼저 'DB 새로 만들기'를 눌러 주세요."
@@ -344,8 +465,15 @@ def select_date_by_dial(index: int, dates: list[str]) -> tuple[str, str, list[di
 def ask_chatbot(message: str, selected_date: str, history: list[dict[str, str]]) -> list[dict[str, str]]:
     history = history or []
     message = (message or "").strip()
-    target_date = extract_date(message) or selected_date
-    answer = answer_schedule(target_date)
+    range_query = extract_range_query(message)
+
+    if range_query:
+        start_date, end_date, title = range_query
+        answer = answer_schedule_range(start_date, end_date, title)
+        target_date = start_date
+    else:
+        target_date = extract_date(message) or selected_date
+        answer = answer_schedule(target_date)
 
     if message:
         history.append({"role": "user", "content": message})
