@@ -102,21 +102,35 @@ ANSWER_JSON_SCHEMA = {
 
 @app.post("/booking-help")
 async def booking_help(question: BookingQuestion):
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for turn in question.history:
+        messages.append({"role": turn.role, "content": turn.content})
+    messages.append({"role": "user", "content": question.message})
+
     try:
         response = client.responses.create(
             model=DEFAULT_MODEL,
-            input=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": question.message},
-            ],
+            input=messages,
+            tools=[{"type": "web_search_preview"}],
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "booking_answer",
+                    "schema": ANSWER_JSON_SCHEMA,
+                    "strict": True,
+                }
+            },
             temperature=0.3,
-            max_output_tokens=400,
+            max_output_tokens=600,
         )
-        answer = response.output_text
+        parsed = BookingAnswer.model_validate_json(response.output_text)
+        answer = parsed.answer
+        visual = parsed.visual.model_dump()
     except Exception:
         answer = "지금은 답변을 가져올 수 없어요. 인터파크 티켓에서 직접 확인해 주세요."
+        visual = {"type": "none", "zone": None}
 
-    return {"answer": answer, "link": BOOKING_LINK}
+    return {"answer": answer, "link": BOOKING_LINK, "visual": visual}
 
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
