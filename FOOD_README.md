@@ -25,12 +25,16 @@ python project1\food.py
 ### 네이버 API 키 설정 (주변 맛집 실시간 검색)
 
 [네이버 개발자센터](https://developers.naver.com)에서 "검색" API를 등록하고
-발급받은 키를 `project1\.env` 에 입력합니다. (`.env` 는 깃에 커밋되지 않습니다)
+발급받은 키를 `.env` 에 입력합니다. (`.env` 는 깃에 커밋되지 않습니다)
 
 ```
 NAVER_CLIENT_ID=발급받은_클라이언트_ID
 NAVER_CLIENT_SECRET=발급받은_시크릿
 ```
+
+`.env` 위치는 자유롭습니다. `food.py` 가 실행 위치(cwd)와 스크립트 위치를 기준으로
+`.env` 와 `.venv/.env` 를 모두 탐색하므로, 상위 폴더의 공용 `.venv\.env` 에
+키가 있어도 자동으로 인식합니다.
 
 키가 없으면 내장 맛집 데이터로 동작하므로 프로그램은 그대로 실행됩니다.
 

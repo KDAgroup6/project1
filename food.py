@@ -5,15 +5,42 @@ import os
 import re
 import urllib.parse
 import urllib.request
+from pathlib import Path
 import gradio as gr
 
 # .env 파일에서 네이버 API 키를 읽어옵니다. (python-dotenv 미설치 시에도 동작)
 try:
     from dotenv import load_dotenv
-
-    load_dotenv()
 except ImportError:
-    pass
+    load_dotenv = None
+
+
+def _load_env() -> None:
+    """실행 위치(cwd)와 스크립트 위치를 기준으로 .env / .venv/.env 를 모두 탐색합니다.
+
+    프로젝트마다 .env 위치가 달라(예: 상위 폴더의 .venv/.env) 어디서 실행해도
+    키를 찾을 수 있도록 여러 후보 경로를 순서대로 로드합니다.
+    """
+    if load_dotenv is None:
+        return
+    here = Path(__file__).resolve()
+    candidates = [
+        Path.cwd() / ".env",
+        Path.cwd() / ".venv" / ".env",
+        here.parent / ".env",
+        here.parent.parent / ".env",
+        here.parent.parent / ".venv" / ".env",
+    ]
+    seen: set[Path] = set()
+    for path in candidates:
+        if path in seen:
+            continue
+        seen.add(path)
+        if path.exists():
+            load_dotenv(path, override=False)
+
+
+_load_env()
 
 
 # 네이버 지도 검색 URL을 만드는 헬퍼.
