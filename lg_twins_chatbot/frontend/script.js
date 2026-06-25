@@ -24,6 +24,8 @@ const TOOL_LABELS = {
   recommend_jamsil_food: "먹거리 추천",
 };
 
+input.placeholder = `예: 오늘(${todayKey}) 경기 날씨에 맞는 옷 추천해줘`;
+
 const SEAT_ZONE_INFO = {
   infield: {
     label: "내야석",

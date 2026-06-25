@@ -22,8 +22,6 @@ except ImportError:
     def load_dotenv(*args: Any, **kwargs: Any) -> bool:
         return False
 
-load_dotenv(override=True)
-
 APP_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = APP_DIR / "frontend"
 DATA_DIR = APP_DIR / "data"
@@ -32,6 +30,9 @@ LG_API_URL = "https://www.lgtwins.com/api/game/getGame"
 BOOKING_LINK = "https://ticket.interpark.com"
 KST = timezone(timedelta(hours=9), name="KST")
 DEFAULT_MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "gpt-4o-mini")
+
+load_dotenv(APP_DIR / "backend" / ".env", override=True)
+DEFAULT_MODEL = os.getenv("OPENAI_DEFAULT_MODEL", DEFAULT_MODEL)
 
 app = FastAPI(title="LG Twins Game Day Chatbot")
 app.add_middleware(
@@ -56,74 +57,6 @@ STADIUM_COORDS = {
     "창원": {"lat": 35.2225, "lon": 128.5823},
     "사직": {"lat": 35.1940, "lon": 129.0615},
 }
-
-RESTAURANTS = [
-    {
-        "name": "잠실 원샷치킨",
-        "place": "inside",
-        "condition": "든든한 식사",
-        "menu": "치킨, 감자튀김, 콤보 메뉴",
-        "location": "3루 방향 내부 매장 구역",
-        "reason": "여러 명이 함께 나누어 먹기 좋아요.",
-    },
-    {
-        "name": "버거앤프라이즈 잠실야구장점",
-        "place": "inside",
-        "condition": "든든한 식사",
-        "menu": "햄버거 세트",
-        "location": "중앙 출입구 인근",
-        "reason": "경기 시작 전에 빠르게 식사하기 좋아요.",
-    },
-    {
-        "name": "스테프핫도그",
-        "place": "inside",
-        "condition": "간단한 간식",
-        "menu": "핫도그, 소시지",
-        "location": "1루 방향 내부 매장 구역",
-        "reason": "한 손으로 들고 먹기 편해요.",
-    },
-    {
-        "name": "잠실야구장 분식 매장",
-        "place": "inside",
-        "condition": "인기 음식",
-        "menu": "떡볶이, 튀김, 닭강정",
-        "location": "3루 내야 출입구 인근",
-        "reason": "야구장에서 가볍게 즐기기 좋은 인기 메뉴예요.",
-    },
-    {
-        "name": "해주냉면",
-        "place": "outside",
-        "condition": "경기 전",
-        "menu": "비빔냉면, 물냉면",
-        "location": "잠실야구장에서 도보 약 10분, 잠실새내역 인근",
-        "reason": "경기 전에 부담 없이 빠르게 먹기 좋은 잠실새내 대표 냉면집이에요.",
-    },
-    {
-        "name": "파오파오",
-        "place": "outside",
-        "condition": "경기 전",
-        "menu": "만두, 새우만두",
-        "location": "잠실야구장에서 도보 약 12분, 잠실새내 새마을시장 인근",
-        "reason": "경기 전에 간단하게 먹거나 포장해서 이동하기 좋아요.",
-    },
-    {
-        "name": "잠실새내 고깃집",
-        "place": "outside",
-        "condition": "경기 후",
-        "menu": "삼겹살, 목살",
-        "location": "잠실야구장에서 도보 약 8분",
-        "reason": "친구들과 경기 이야기를 나누며 식사하기 좋아요.",
-    },
-    {
-        "name": "백암왕순대 잠실새내점",
-        "place": "outside",
-        "condition": "경기 후",
-        "menu": "순대국, 수육",
-        "location": "잠실야구장에서 도보 약 10분",
-        "reason": "저녁 경기 후 따뜻하고 든든하게 먹기 좋아요.",
-    },
-]
-
 
 class ChatTurn(BaseModel):
     role: Literal["user", "assistant"]
@@ -265,11 +198,15 @@ def update_schedule_database(year: int | None = None) -> int:
 
 def parse_date(text: str) -> str | None:
     today = datetime.now(KST).date()
-    compact = re.sub(r"\s+", "", text)
+    compact = re.sub(r"\s+", "", text).lower()
     relative = {"오늘": 0, "내일": 1, "모레": 2, "어제": -1}
     for word, delta in relative.items():
         if word in compact:
             return (today + timedelta(days=delta)).isoformat()
+    if "today" in compact:
+        return today.isoformat()
+    if "tomorrow" in compact:
+        return (today + timedelta(days=1)).isoformat()
 
     match = re.search(r"(20\d{2})[-./년]*(\d{1,2})[-./월]*(\d{1,2})", compact)
     if match:
@@ -513,14 +450,15 @@ def search_jamsil_food_with_openai(place: str, condition: str, query: str) -> di
 
     place_label = "잠실야구장 내부" if place == "inside" else "잠실야구장 주변"
     prompt = f"""
-잠실야구장 직관 관객에게 추천할 음식점 또는 먹거리를 최신 검색으로 확인해서 정확히 5개 추천해줘.
+잠실야구장 직관 관객에게 추천할 음식점 또는 먹거리를 최신 웹 검색으로 확인해서 정확히 5개 추천해줘.
 
 사용자 질문: {query}
 장소 조건: {place_label}
 상황/분류: {condition}
 
 조건:
-- 실제 방문자가 이해하기 쉽게 음식점명, 대표 메뉴, 위치/거리, 추천 이유를 써줘.
+- 실제 검색으로 확인 가능한 음식점/매장 이름을 name에 넣어줘.
+- 실제 방문자가 이해하기 쉽게 대표 메뉴, 위치/거리, 추천 이유를 써줘.
 - 내부 매장은 입점 여부가 바뀔 수 있음을 notice에 포함해.
 - 주변 맛집은 잠실야구장 또는 잠실새내역 기준으로 설명해.
 - 모르면 단정하지 말고 확인 필요하다고 써줘.
@@ -552,7 +490,7 @@ def search_jamsil_food_with_openai(place: str, condition: str, query: str) -> di
 
 
 # TOOL 4. 음식점 추천
-# OpenAI 웹 검색으로 잠실야구장 내/외부 먹거리를 5개 추천하고, 실패하면 기본 데이터로 대체합니다.
+# 저장된 음식점 목록 없이 OpenAI 웹 검색으로 실제 음식점/매장 이름을 찾아 5개 추천합니다.
 def recommend_jamsil_food(place: str | None = None, timing_or_category: str | None = None, query: str = "") -> dict[str, Any]:
     compact = re.sub(r"\s+", "", query)
     selected_place = place
@@ -576,32 +514,23 @@ def recommend_jamsil_food(place: str | None = None, timing_or_category: str | No
         searched = search_jamsil_food_with_openai(selected_place, condition, query)
         if searched:
             return searched
-    except Exception:
-        pass
+    except Exception as exc:
+        return {
+            "tool_name": "recommend_jamsil_food",
+            "source": "search_error",
+            "place": selected_place,
+            "condition": condition,
+            "restaurants": [],
+            "notice": f"음식점 검색 중 문제가 생겼습니다. 잠시 후 다시 시도해 주세요. ({exc})",
+        }
 
-    matches = [
-        restaurant
-        for restaurant in RESTAURANTS
-        if restaurant["place"] == selected_place and restaurant["condition"] == condition
-    ]
-    if len(matches) < 5:
-        extra = [
-            restaurant
-            for restaurant in RESTAURANTS
-            if restaurant["place"] == selected_place and restaurant not in matches
-        ]
-        matches.extend(extra)
-    if len(matches) < 5:
-        extra = [restaurant for restaurant in RESTAURANTS if restaurant not in matches]
-        matches.extend(extra)
-    matches = matches[:5]
     return {
         "tool_name": "recommend_jamsil_food",
-        "source": "local_fallback",
+        "source": "search_unavailable",
         "place": selected_place,
         "condition": condition,
-        "restaurants": matches,
-        "notice": "입점 여부, 메뉴, 영업시간은 바뀔 수 있으니 방문 전 최신 정보를 확인해 주세요.",
+        "restaurants": [],
+        "notice": "음식점 추천은 OpenAI 웹 검색이 필요합니다. OPENAI_API_KEY를 설정한 뒤 다시 시도해 주세요.",
     }
 
 
@@ -675,6 +604,7 @@ TOOL_HANDLERS = {
 SYSTEM_PROMPT = """
 너는 LG 트윈스 직관 준비를 도와주는 대화형 챗봇 '트윈스봇'이야.
 오늘 날짜는 {today}이고, 시간대는 한국 시간(KST)이야.
+사용자가 '오늘' 또는 'today'라고 말하면 반드시 {today}로 해석해.
 사용자의 질문을 보고 필요한 도구를 골라 경기 일정, 예매, 날씨 기반 복장, 잠실 먹거리를 안내해.
 답변은 한국어로 짧고 친절하게 작성하고, 모르는 정보는 확정하지 말고 공식 확인이 필요하다고 말해.
 이번 주, 다음 주, 오늘 같은 상대 날짜 표현은 오늘 날짜를 기준으로 해석해.
@@ -724,7 +654,7 @@ def local_answer(tool_name: str, tool_result: dict[str, Any]) -> str:
         )
     restaurants = tool_result.get("restaurants", [])
     if not restaurants:
-        return "조건에 맞는 추천지가 아직 없어요. 야구장 안/밖이나 경기 전/후를 조금 더 알려 주세요."
+        return tool_result.get("notice", "음식점 검색 결과가 없습니다. 잠시 후 다시 시도해 주세요.")
     lines = [
         f"{item['name']} - {item['menu']} ({item['location']})\n추천 이유: {item['reason']}"
         for item in restaurants
@@ -752,7 +682,7 @@ def chat(request: ChatRequest):
     messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
     for turn in request.history[-12:]:
         messages.append({"role": turn.role, "content": turn.content})
-    messages.append({"role": "user", "content": message})
+    messages.append({"role": "user", "content": f"{message}\n\n[현재 날짜: {datetime.now(KST).date().isoformat()} / 시간대: KST]"})
 
     try:
         first = client.responses.create(
