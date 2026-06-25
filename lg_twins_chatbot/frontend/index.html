@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>트윈스봇 | LG 트윈스 직관 도우미</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app-shell">
+    <section class="chat-panel">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">LG TWINS GAME DAY</p>
+          <h1>트윈스봇</h1>
+        </div>
+        <a class="ticket-link" href="https://ticket.interpark.com" target="_blank" rel="noopener noreferrer">예매</a>
+      </header>
+
+      <div class="brand-watermark" aria-hidden="true">
+        <img src="assets/twins-logo-cutout.png" alt="" />
+      </div>
+
+      <div id="log" class="chat-log" aria-live="polite"></div>
+
+      <form id="chat-form" class="composer">
+        <input
+          id="message"
+          type="text"
+          autocomplete="off"
+          placeholder="예: 오늘 경기 날씨에 맞는 옷 추천해줘"
+        />
+        <button type="submit">전송</button>
+      </form>
+    </section>
+
+    <aside class="side-panel">
+      <section class="mini-card status-card">
+        <p class="label">선택한 기능</p>
+        <strong id="tool-name">대화 대기</strong>
+      </section>
+
+      <section class="calendar-section">
+        <div class="calendar-head">
+          <button id="prev-month" type="button" aria-label="이전 달">‹</button>
+          <h2 id="month-label"></h2>
+          <button id="next-month" type="button" aria-label="다음 달">›</button>
+        </div>
+        <div class="weekdays">
+          <span>일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span>토</span>
+        </div>
+        <div id="calendar-grid" class="calendar-grid"></div>
+        <div class="calendar-legend" aria-label="캘린더 표시 안내">
+          <span><i class="legend-dot today"></i>오늘</span>
+          <span><i class="legend-dot past"></i>지난 경기</span>
+          <span><i class="legend-dot upcoming"></i>다음 경기</span>
+        </div>
+        <p class="calendar-note">경기가 있는 날짜를 누르면 그날 경기와 날씨 기준 복장을 바로 물어봅니다.</p>
+      </section>
+
+      <section id="result-card" class="mini-card result-card">
+        <p class="label">추천 정보</p>
+        <div id="result-content">일정, 예매, 복장, 먹거리 정보를 여기서 함께 볼 수 있어요.</div>
+      </section>
+
+      <section class="quick-actions">
+        <button type="button" data-prompt="이번주 LG 트윈스 경기 일정 알려줘">이번주 일정</button>
+        <button type="button" data-prompt="LG 트윈스 경기 예매 방법 알려줘">예매 방법</button>
+        <button type="button" data-prompt="야구장 안에서 간단한 간식 추천해줘">내부 간식</button>
+        <button type="button" data-prompt="경기 끝나고 잠실 근처 맛집 추천해줘">경기 후 맛집</button>
+      </section>
+    </aside>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
