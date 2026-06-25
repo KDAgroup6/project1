@@ -444,6 +444,31 @@ FOOD_JSON_SCHEMA = {
 }
 
 
+def is_placeholder_restaurant(item: dict[str, Any]) -> bool:
+    text = " ".join(str(item.get(key, "")) for key in ["name", "menu", "location", "reason"])
+    placeholder_patterns = [
+        r"맛집\s*\d+",
+        r"음식점\s*\d+",
+        r"restaurant\s*\d+",
+        r"메뉴\s*\d+",
+        r"menu\s*\d+",
+        r"이름\s*\d+",
+        r"상호명",
+        r"예시",
+        r"placeholder",
+    ]
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in placeholder_patterns)
+
+
+def validate_food_results(restaurants: list[dict[str, Any]]) -> None:
+    if len(restaurants) != 5:
+        raise ValueError("검색 결과가 5개가 아닙니다.")
+    bad_items = [item for item in restaurants if is_placeholder_restaurant(item)]
+    if bad_items:
+        names = ", ".join(item.get("name", "이름 없음") for item in bad_items)
+        raise ValueError(f"실제 음식점이 아닌 placeholder 결과가 포함됐습니다: {names}")
+
+
 def search_jamsil_food_with_openai(place: str, condition: str, query: str) -> dict[str, Any] | None:
     if client is None:
         return None
@@ -458,6 +483,8 @@ def search_jamsil_food_with_openai(place: str, condition: str, query: str) -> di
 
 조건:
 - 실제 검색으로 확인 가능한 음식점/매장 이름을 name에 넣어줘.
+- "잠실동 맛집 1", "메뉴1", "음식점 2" 같은 placeholder는 절대 쓰지 마.
+- 5개를 찾지 못하면 가짜로 채우지 말고, 검색으로 확인한 실제 상호명만 사용해.
 - 실제 방문자가 이해하기 쉽게 대표 메뉴, 위치/거리, 추천 이유를 써줘.
 - 내부 매장은 입점 여부가 바뀔 수 있음을 notice에 포함해.
 - 주변 맛집은 잠실야구장 또는 잠실새내역 기준으로 설명해.
@@ -479,6 +506,7 @@ def search_jamsil_food_with_openai(place: str, condition: str, query: str) -> di
         max_output_tokens=900,
     )
     parsed = json.loads(response.output_text)
+    validate_food_results(parsed["restaurants"])
     return {
         "tool_name": "recommend_jamsil_food",
         "source": "openai_web_search",
@@ -521,7 +549,7 @@ def recommend_jamsil_food(place: str | None = None, timing_or_category: str | No
             "place": selected_place,
             "condition": condition,
             "restaurants": [],
-            "notice": f"음식점 검색 중 문제가 생겼습니다. 잠시 후 다시 시도해 주세요. ({exc})",
+            "notice": f"실제 음식점 이름을 확인하는 검색이 충분하지 않았습니다. 잠시 후 다시 시도해 주세요. ({exc})",
         }
 
     return {
