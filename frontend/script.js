@@ -49,9 +49,8 @@ form.addEventListener("submit", async (event) => {
       renderSeatZone(log, data.visual.zone);
     } else if (data.visual && data.visual.type === "booking_steps") {
       renderBookingSteps(log);
+      addBookingLink(data.link);
     }
-
-    addBookingLink(data.link);
   } catch (error) {
     addBubble("서버에 연결할 수 없습니다.", "bot");
   }
