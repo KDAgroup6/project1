@@ -1,21 +1,44 @@
-from __future__ import annotations
+"""LG 트윈스 경기 일정 챗봇 (발표용 코드)
 
-import re
-import sqlite3
-from datetime import date, datetime, timedelta
-from pathlib import Path
-from typing import Any
-from zoneinfo import ZoneInfo
+[프로그램 한 줄 요약]
+LG 트윈스 공식 API에서 경기 일정을 받아 SQLite DB에 저장하고,
+사용자의 자연어 날짜 질문("내일", "다음주 화요일" 등)을 해석해
+해당 경기 정보를 챗봇으로 답해 주는 Gradio 웹앱.
 
-import gradio as gr
-import requests
+[데이터 흐름 — 발표 4단계]
+  1) 수집  fetch_month()       : 공식 API를 월별로 호출해 원본 일정 받기
+  2) 가공  normalize_game()    : 사이트 기준 데이터를 'LG 기준'으로 정리(승/패, 홈/원정 등)
+  3) 저장  save_games()/DB     : SQLite에 INSERT OR REPLACE 로 중복 없이 저장·갱신
+  4) 응답  extract_date() →    : 질문에서 날짜를 뽑아 answer_schedule()로 답변 문장 생성
+
+[발표 때 강조하면 좋은 부분]
+  - 자연어 날짜 파싱: extract_date() 와 보조 함수들(상대일·주·요일·숫자날짜 순서대로 검사)
+  - Gradio UI: 슬라이더·드롭다운·챗봇이 같은 '선택 날짜'를 공유하도록 이벤트로 연결
+"""
+
+from __future__ import annotations              # 미래 기능을 미리 사용하는 설정 / 타입 힌트(자료형 표시)를 더 유연하게
+
+import re                                       # 정규표현식(문자 패턴 찾기) 라이브러리
+import sqlite3                                  # SQLite 데이터데이스 사용
+from datetime import date, datetime, timedelta  # 시간 관련 기능들(날짜, 날짜와 시간, 시간 차이 계산)
+from pathlib import Path                        # 파일/폴더 경로를 다루는 최신 방식
+from typing import Any                          # 타입 힌트용 / any는 아무 타입이나 가능
+from zoneinfo import ZoneInfo                   # 시간대 처리
+
+import gradio as gr                             # 웹 UI
+import requests                                 # API 호출
 
 
+# 발표 포인트: 이 프로그램은 LG 트윈스 경기 일정을 공식 API에서 가져와
+# SQLite DB에 저장하고, 사용자의 날짜 질문에 맞는 경기 정보를 챗봇 형태로 보여준다.
 API_URL = "https://www.lgtwins.com/api/game/getGame"
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "lg_twins_schedule.db"
 KST = ZoneInfo("Asia/Seoul")
 DEFAULT_YEAR = datetime.now(KST).date().year
+
+
+# 자연어 질문에서 "월요일", "내일" 같은 표현을 실제 날짜 계산에 쓰기 위한 기준값이다.
 WEEKDAY_NUMBERS = {
     "월": 0,
     "월요일": 0,
@@ -44,12 +67,15 @@ RELATIVE_DAYS = {
 }
 
 
+# DB 연결 함수: row_factory를 설정해 조회 결과를 row["game_date"]처럼 읽기 쉽게 만든다.
 def connect_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
+# 경기 일정 저장소를 준비한다.
+# gmkey를 기본키로 사용하므로 같은 경기를 다시 저장해도 중복이 생기지 않는다.
 def create_table() -> None:
     with connect_db() as conn:
         conn.execute(
@@ -79,6 +105,8 @@ def create_table() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_games_date ON games(game_date)")
 
 
+# LG 트윈스 공식 사이트의 월별 경기 API를 호출한다.
+# 발표에서는 "외부 데이터를 가져오는 단계"로 설명하면 된다.
 def fetch_month(year: int, month: int) -> list[dict[str, Any]]:
     response = requests.post(
         API_URL,
@@ -96,6 +124,8 @@ def fetch_month(year: int, month: int) -> list[dict[str, Any]]:
     return payload.get("data", {}).get("data", [])
 
 
+# API 원본 데이터는 사이트 기준 필드명과 팀 기준이 섞여 있으므로,
+# 앱에서 쓰기 편하도록 "LG 기준"의 일정 데이터로 정리한다.
 def normalize_game(game: dict[str, Any]) -> dict[str, Any]:
     home_key = game.get("homeKey")
     visit_key = game.get("visitKey")
@@ -111,6 +141,7 @@ def normalize_game(game: dict[str, Any]) -> dict[str, Any]:
     end_flag = game.get("endFlag")
     game_type = "시범경기" if game.get("gameFlag") == "1" else "정규경기"
 
+    # 경기 취소, 경기 종료, 진행 예정 상태를 구분하고 종료된 경기는 승/패/무를 계산한다.
     result = ""
     if cancel_flag == "1":
         status = "경기취소"
@@ -128,6 +159,7 @@ def normalize_game(game: dict[str, Any]) -> dict[str, Any]:
     gamedate = str(game.get("gamedate", ""))
     game_date = f"{gamedate[:4]}-{gamedate[4:6]}-{gamedate[6:8]}"
 
+    # DB 컬럼명과 같은 key로 반환해서 INSERT 문에 바로 바인딩할 수 있게 한다.
     return {
         "gmkey": game.get("gmkey"),
         "game_date": game_date,
@@ -150,6 +182,8 @@ def normalize_game(game: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# API에서 받은 경기 목록 중 LG 경기만 골라 DB에 저장한다.
+# INSERT OR REPLACE를 사용해 이미 저장된 경기 정보도 최신 상태로 갱신한다.
 def save_games(games: list[dict[str, Any]]) -> int:
     normalized_games = [
         normalize_game(game)
@@ -179,6 +213,8 @@ def save_games(games: list[dict[str, Any]]) -> int:
     return len(normalized_games)
 
 
+# 한 해의 1월부터 12월까지 차례대로 호출해 DB를 최신 일정으로 채운다.
+# 일부 월에서 실패하더라도 나머지 월은 계속 저장하고, 실패 목록을 메시지에 포함한다.
 def update_database(year: int = DEFAULT_YEAR) -> str:
     create_table()
 
@@ -196,6 +232,7 @@ def update_database(year: int = DEFAULT_YEAR) -> str:
     return f"{year}년 LG 트윈스 일정 {saved_count}건을 DB에 저장했습니다."
 
 
+# 드롭다운과 슬라이더에 표시할 수 있도록 DB에 존재하는 경기 날짜만 가져온다.
 def get_available_dates(year: int = DEFAULT_YEAR) -> list[str]:
     create_table()
     with connect_db() as conn:
@@ -211,6 +248,7 @@ def get_available_dates(year: int = DEFAULT_YEAR) -> list[str]:
     return [row["game_date"] for row in rows]
 
 
+# 사용자가 특정 날짜를 선택하거나 질문했을 때, 그 날짜의 경기만 조회한다.
 def get_games_by_date(game_date: str) -> list[sqlite3.Row]:
     with connect_db() as conn:
         return conn.execute(
@@ -221,9 +259,10 @@ def get_games_by_date(game_date: str) -> list[sqlite3.Row]:
             ORDER BY game_time, gmkey
             """,
             (game_date,),
-        ).fetchall()
+        ).fetchall() # DB에서 조회한 결과를 전부 가져오는 함수
 
 
+# "이번 주", "다음 주말"처럼 기간 질문이 들어왔을 때 해당 범위의 경기를 조회한다.
 def get_games_in_range(start_date: str, end_date: str) -> list[sqlite3.Row]:
     with connect_db() as conn:
         return conn.execute(
@@ -237,6 +276,7 @@ def get_games_in_range(start_date: str, end_date: str) -> list[sqlite3.Row]:
         ).fetchall()
 
 
+# DB 한 행(row)을 사용자가 읽기 쉬운 경기 설명 문장으로 바꾼다.
 def format_game(row: sqlite3.Row) -> str:
     home_or_away = "홈" if row["is_home"] else "원정"
     double_header = ", 더블헤더" if row["dheader"] in ("1", "2") else ""
@@ -245,6 +285,7 @@ def format_game(row: sqlite3.Row) -> str:
             f"시간: {row['game_time']}",
             f"경기장소: {row['stadium']}",
             f"상대팀: {row['opponent']}",
+            "",
             f"경기: LG 트윈스 vs {row['opponent']} ({home_or_away}{double_header})",
         ]
     )
@@ -260,6 +301,7 @@ def format_game(row: sqlite3.Row) -> str:
     return f"{base}\n상태: {row['status']}"
 
 
+# 하루 일정 답변 생성 함수: 날짜 하나를 기준으로 챗봇 응답 문장을 만든다.
 def answer_schedule(game_date: str) -> str:
     if not game_date:
         return "날짜를 먼저 선택해 주세요."
@@ -275,6 +317,7 @@ def answer_schedule(game_date: str) -> str:
     return "\n".join(lines)
 
 
+# 기간 일정 답변 생성 함수: 여러 날짜의 경기를 날짜별로 묶어서 보여준다.
 def answer_schedule_range(start_date: str, end_date: str, title: str) -> str:
     if not start_date or not end_date:
         return "기간을 먼저 확인할 수 없어요."
@@ -298,10 +341,12 @@ def answer_schedule_range(start_date: str, end_date: str, title: str) -> str:
     return "\n".join(lines)
 
 
+# 모든 날짜 계산은 한국 시간 기준으로 맞춘다.
 def today_kst() -> date:
     return datetime.now(KST).date()
 
 
+# 잘못된 날짜(예: 2월 30일)가 들어오면 None을 반환해 안전하게 처리한다.
 def make_date(year: int, month: int, day: int) -> str | None:
     try:
         return date(year, month, day).isoformat()
@@ -309,13 +354,15 @@ def make_date(year: int, month: int, day: int) -> str | None:
         return None
 
 
+# "오늘", "내일", "어제" 같은 상대 날짜 표현을 실제 날짜로 변환한다.
 def extract_relative_day(text: str) -> str | None:
     for word, delta in RELATIVE_DAYS.items():
         if word in text:
-            return (today_kst() + timedelta(days=delta)).isoformat()
+            return (today_kst() + timedelta(days=delta)).isoformat() # 시간을 국제표준형식 문자열로 변환해주는 함수
     return None
 
 
+# "이번 주", "다음 주", "지난 주" 표현을 몇 주 차이인지 숫자로 바꾼다.
 def week_start_offset(text: str) -> int | None:
     compact_text = re.sub(r"\s+", "", text)
     if "다다음주" in compact_text:
@@ -329,6 +376,8 @@ def week_start_offset(text: str) -> int | None:
     return None
 
 
+# 주 단위 질문을 시작일과 종료일로 변환한다.
+# 예: "다음 주 일정" -> 다음 주 월요일부터 일요일까지의 날짜 범위.
 def extract_week_range(text: str) -> tuple[str, str, str] | None:
     compact_text = re.sub(r"\s+", "", text)
     if re.search(r"(월요일|화요일|수요일|목요일|금요일|토요일|일요일)", compact_text):
@@ -365,6 +414,7 @@ def extract_week_range(text: str) -> tuple[str, str, str] | None:
     return None
 
 
+# "이번 주말", "다음 주말"처럼 주말을 묻는 질문은 토요일 날짜를 대표 날짜로 잡는다.
 def extract_weekend_date(text: str) -> str | None:
     compact_text = re.sub(r"\s+", "", text)
     weekend_offsets = {
@@ -385,6 +435,7 @@ def extract_weekend_date(text: str) -> str | None:
     return None
 
 
+# "다음 주 화요일", "금요일"처럼 요일이 포함된 질문을 실제 날짜로 바꾼다.
 def extract_weekday_date(text: str) -> str | None:
     compact_text = re.sub(r"\s+", "", text)
     weekday_pattern = "월요일|화요일|수요일|목요일|금요일|토요일|일요일|월|화|수|목|금|토|일"
@@ -396,6 +447,8 @@ def extract_weekday_date(text: str) -> str | None:
         "이번": 0,
         "지난주": -1,
         "저번주": -1,
+        "저저번주": -2,
+        "지지난주": -2
     }
 
     for prefix, week_offset in week_offsets.items():
@@ -414,6 +467,9 @@ def extract_weekday_date(text: str) -> str | None:
     return None
 
 
+# ★발표 포인트(핵심): 챗봇 질문에서 날짜를 추출하는 가장 중요한 함수.
+# "오늘/내일" → "이번주말" → "다음주 화요일" → "2026-06-24" → "6/24" 순으로
+# 더 구체적인 표현부터 차례대로 검사해, 가장 먼저 매칭되는 날짜를 돌려준다.
 def extract_date(text: str) -> str | None:
     text = text.strip()
 
@@ -446,11 +502,13 @@ def extract_date(text: str) -> str | None:
     return None
 
 
+# 기간형 질문인지 확인한다. 현재는 주 단위 질문을 기간 질문으로 처리한다.
 def extract_range_query(text: str) -> tuple[str, str, str] | None:
     compact_text = re.sub(r"\s+", "", text)
     return extract_week_range(compact_text)
 
 
+# 슬라이더 값으로 날짜를 선택했을 때 챗봇 답변과 선택 날짜를 함께 갱신한다.
 def select_date_by_dial(index: int, dates: list[str]) -> tuple[str, str, list[dict[str, str]]]:
     if not dates:
         message = "DB에 저장된 일정이 없습니다. 먼저 'DB 새로 만들기'를 눌러 주세요."
@@ -462,11 +520,13 @@ def select_date_by_dial(index: int, dates: list[str]) -> tuple[str, str, list[di
     return selected_date, selected_date, [{"role": "assistant", "content": answer}]
 
 
+# 사용자의 채팅 입력을 해석해 단일 날짜 질문인지 기간 질문인지 나눈 뒤 답변을 만든다.
 def ask_chatbot(message: str, selected_date: str, history: list[dict[str, str]]) -> list[dict[str, str]]:
     history = history or []
     message = (message or "").strip()
     range_query = extract_range_query(message)
 
+    # 기간 질문이면 범위 조회를 사용하고, 아니면 추출된 날짜나 현재 선택 날짜를 사용한다.
     if range_query:
         start_date, end_date, title = range_query
         answer = answer_schedule_range(start_date, end_date, title)
@@ -483,6 +543,8 @@ def ask_chatbot(message: str, selected_date: str, history: list[dict[str, str]])
     return history
 
 
+# "DB 새로 만들기" 버튼을 눌렀을 때 실행되는 함수다.
+# API 재호출, DB 저장, 날짜 목록 갱신, 첫 답변 생성까지 한 번에 처리한다.
 def refresh_db(year: int) -> tuple[gr.Dropdown, gr.Slider, str, str, list[dict[str, str]]]:
     year = int(year or DEFAULT_YEAR)
     result_message = update_database(year)
@@ -509,6 +571,7 @@ def refresh_db(year: int) -> tuple[gr.Dropdown, gr.Slider, str, str, list[dict[s
     )
 
 
+# 드롭다운으로 날짜를 바꾸면 슬라이더 위치와 챗봇 답변도 같은 날짜로 맞춘다.
 def select_from_dropdown(selected_date: str, dates: list[str]) -> tuple[int, str, list[dict[str, str]]]:
     if not selected_date:
         return 0, "날짜를 선택해 주세요.", []
@@ -518,6 +581,7 @@ def select_from_dropdown(selected_date: str, dates: list[str]) -> tuple[int, str
     return index, selected_date, [{"role": "assistant", "content": answer}]
 
 
+# 앱이 처음 실행될 때 DB를 준비하고, 기본 연도의 일정을 미리 불러온다.
 create_table()
 initial_status = update_database(DEFAULT_YEAR)
 initial_dates = get_available_dates(DEFAULT_YEAR)
@@ -525,6 +589,10 @@ initial_date = initial_dates[0] if initial_dates else ""
 initial_chat = [{"role": "assistant", "content": answer_schedule(initial_date)}] if initial_date else []
 
 
+# ★발표 포인트(화면): Gradio Blocks로 UI를 구성한다.
+# 위쪽 = DB 갱신/연도·날짜 선택, 아래쪽 = 챗봇 질문·답변.
+# 슬라이더/드롭다운/챗봇이 아래 .click()·.change()·.submit() 이벤트로 서로 연결되어,
+# 어느 쪽으로 날짜를 바꿔도 나머지가 같은 날짜로 동기화되는 점을 보여 주면 좋다.
 with gr.Blocks(title="LG 트윈스 경기 일정 챗봇") as demo:
     gr.Markdown("# LG 트윈스 경기 일정 챗봇")
     gr.Markdown("공식 홈페이지 일정 API를 가져와 SQLite DB로 저장한 뒤, 날짜를 선택하면 해당 경기 일정을 알려줍니다.")
@@ -564,11 +632,13 @@ with gr.Blocks(title="LG 트윈스 경기 일정 챗봇") as demo:
         inputs=year_input,
         outputs=[date_dropdown, date_dial, selected_date_box, status_box, chatbot],
     ).then(
+        # DB 갱신 후에는 Gradio 상태값(dates_state)도 최신 날짜 목록으로 바꾼다.
         lambda year: get_available_dates(int(year or DEFAULT_YEAR)),
         inputs=year_input,
         outputs=dates_state,
     )
 
+    # 슬라이더와 드롭다운은 같은 날짜 선택 기능을 공유하므로 서로 값을 맞춰준다.
     date_dial.change(
         select_date_by_dial,
         inputs=[date_dial, dates_state],
@@ -581,6 +651,7 @@ with gr.Blocks(title="LG 트윈스 경기 일정 챗봇") as demo:
         outputs=[date_dial, selected_date_box, chatbot],
     )
 
+    # 엔터로 질문하거나 버튼을 눌러도 같은 챗봇 처리 함수가 실행된다.
     question.submit(
         ask_chatbot,
         inputs=[question, selected_date_box, chatbot],
@@ -593,5 +664,6 @@ with gr.Blocks(title="LG 트윈스 경기 일정 챗봇") as demo:
     )
 
 
+# 파일을 직접 실행했을 때만 웹 앱 서버를 시작한다.
 if __name__ == "__main__":
     demo.launch()
