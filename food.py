@@ -1,7 +1,19 @@
 from __future__ import annotations
+import html as html_lib
+import json
+import os
 import re
 import urllib.parse
+import urllib.request
 import gradio as gr
+
+# .env 파일에서 네이버 API 키를 읽어옵니다. (python-dotenv 미설치 시에도 동작)
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
 
 
 # 네이버 지도 검색 URL을 만드는 헬퍼.
@@ -9,10 +21,70 @@ import gradio as gr
 # (Chatbot 안에서 링크를 누르면 새 탭으로 네이버 지도가 열립니다 = 팝업 효과)
 NAVER_MAP_SEARCH = "https://map.naver.com/p/search/"
 
+# 네이버 지역검색(Local Search) API 설정.
+# 키는 .env 의 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 에서 읽습니다(코드에 직접 넣지 않음).
+NAVER_LOCAL_API = "https://openapi.naver.com/v1/search/local.json"
+NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "")
+NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET", "")
+
+# 방문 시점별로 네이버에 실제로 검색할 키워드
+OUTSIDE_SEARCH_QUERY = {
+    "경기 전": "잠실새내역 맛집",
+    "경기 후": "잠실새내 회식 맛집",
+}
+
 
 def naver_map_link(query: str) -> str:
     """식당 이름(또는 '식당명 지역')을 네이버 지도 검색 링크로 변환합니다."""
     return NAVER_MAP_SEARCH + urllib.parse.quote(query)
+
+
+def _strip_tags(text: str | None) -> str:
+    """네이버 API 응답의 <b> 등 HTML 태그와 엔티티를 제거합니다."""
+    return html_lib.unescape(re.sub(r"<[^>]+>", "", text or "")).strip()
+
+
+def search_naver_local(query: str, display: int = 3) -> list[dict[str, str]]:
+    """네이버 지역검색 API로 식당을 검색해 카드용 dict 리스트로 반환합니다.
+
+    API 키가 없거나 호출에 실패하면 빈 리스트를 돌려주고,
+    호출한 쪽에서 내장(fallback) 데이터를 사용하도록 합니다.
+    """
+    if not (NAVER_CLIENT_ID and NAVER_CLIENT_SECRET):
+        return []
+
+    url = NAVER_LOCAL_API + "?" + urllib.parse.urlencode(
+        {"query": query, "display": display, "sort": "random"}
+    )
+    request = urllib.request.Request(
+        url,
+        headers={
+            "X-Naver-Client-Id": NAVER_CLIENT_ID,
+            "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return []
+
+    results = []
+    for item in payload.get("items", []):
+        name = _strip_tags(item.get("title"))
+        if not name:
+            continue
+        results.append(
+            {
+                "name": name,
+                "place": "outside",
+                "category": _strip_tags(item.get("category")),
+                "location": item.get("roadAddress") or item.get("address") or "",
+                "homepage": item.get("link", ""),
+                "naver_query": name,  # 네이버 지도 링크는 식당명으로 검색
+            }
+        )
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +297,20 @@ def format_outside_card(index: int, restaurant: dict[str, str]) -> str:
     )
 
 
+def format_live_card(index: int, restaurant: dict[str, str]) -> str:
+    """네이버 지역검색 실시간 결과 카드. 식당명을 네이버 지도 링크로 연결합니다."""
+    link = naver_map_link(restaurant["naver_query"])
+    lines = [f"### {index}. [{restaurant['name']}]({link})"]
+    if restaurant.get("category"):
+        lines.append(f"- 분류: {restaurant['category']}")
+    if restaurant.get("location"):
+        lines.append(f"- 주소: {restaurant['location']}")
+    if restaurant.get("homepage"):
+        lines.append(f"- 홈페이지: {restaurant['homepage']}")
+    lines.append(f"- 🗺️ [네이버 지도에서 보기]({link})")
+    return "\n".join(lines)
+
+
 def format_restaurants(restaurants: list[dict[str, str]], title: str) -> str:
     if not restaurants:
         return "조건에 맞는 음식점이 없어요. 다른 조건을 선택해 주세요."
@@ -251,6 +337,15 @@ def recommend_outside(timing: str) -> str:
     if not timing:
         return "방문 시점을 선택해 주세요."
 
+    # 1순위: 네이버 지역검색 API로 실시간 맛집 검색
+    query = OUTSIDE_SEARCH_QUERY.get(timing, "잠실새내 맛집")
+    live = search_naver_local(query, display=3)
+    if live:
+        title = f"잠실야구장 주변 · {timing} 추천 (네이버 검색: {query})"
+        cards = [format_live_card(i, r) for i, r in enumerate(live, start=1)]
+        return f"## {title}\n\n" + "\n\n---\n\n".join(cards) + NOTICE
+
+    # 2순위(대체): API 키가 없거나 호출 실패 시 내장 데이터 사용
     restaurants = find_restaurants("outside", timing)
     return format_restaurants(restaurants, f"잠실야구장 주변 · {timing} 추천")
 

@@ -1,1 +1,2 @@
 gradio>=6.0,<7.0
+python-dotenv>=1.0
