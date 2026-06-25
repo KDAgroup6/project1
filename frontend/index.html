@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<title>LG 트윈스 예매 도움 챗봇</title>
+<style>
+  body {
+    max-width: 480px;
+    margin: 40px auto;
+    font-family: sans-serif;
+  }
+  h1 {
+    font-size: 20px;
+  }
+  #log {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 12px;
+    height: 360px;
+    overflow-y: auto;
+    margin-bottom: 12px;
+  }
+  .bubble {
+    margin-bottom: 10px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    max-width: 85%;
+    white-space: pre-wrap;
+  }
+  .user {
+    background: #cfe9ff;
+    margin-left: auto;
+    text-align: right;
+  }
+  .bot {
+    background: #f0f0f0;
+  }
+  .booking-link {
+    display: inline-block;
+    margin-top: 6px;
+    padding: 6px 10px;
+    background: #1a73e8;
+    color: white;
+    border-radius: 6px;
+    text-decoration: none;
+    font-size: 14px;
+  }
+  form {
+    display: flex;
+    gap: 8px;
+  }
+  #message {
+    flex: 1;
+    padding: 8px;
+  }
+  button {
+    padding: 8px 16px;
+  }
+  .visual-card {
+    background: #fafafa;
+    border: 1px solid #eee;
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 10px;
+  }
+  .visual-caption {
+    font-size: 13px;
+    margin: 6px 0 0;
+    text-align: center;
+  }
+  .steps-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .step-item {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+  }
+  .step-number {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #1a73e8;
+    color: white;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .step-title {
+    font-size: 13px;
+    font-weight: bold;
+  }
+  .step-desc {
+    font-size: 12px;
+    color: #555;
+  }
+</style>
+</head>
+<body>
+  <h1>LG 트윈스 예매 도움 챗봇</h1>
+  <div id="log"></div>
+  <form id="chat-form">
+    <input id="message" type="text" placeholder="예: LG 경기 어디서 예매해?" autocomplete="off" />
+    <button type="submit">전송</button>
+  </form>
+  <script src="visuals.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
