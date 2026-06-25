@@ -444,7 +444,7 @@ def search_kakao_local(query: str, lat: float, lon: float, radius: int, limit: i
 def search_naver_local(query: str, limit: int = 5) -> list[dict[str, Any]]:
     if not (NAVER_CLIENT_ID and NAVER_CLIENT_SECRET):
         return []
-    params = urllib.parse.urlencode({"query": query, "display": limit, "sort": "comment"})
+    params = urllib.parse.urlencode({"query": query, "display": min(limit, 5), "sort": "comment"})
     request = urllib.request.Request(
         f"{NAVER_LOCAL_SEARCH_URL}?{params}",
         headers={
@@ -466,6 +466,14 @@ def search_naver_local_multi(queries: list[str], limit: int = 5) -> list[dict[st
         if items:
             return items
     return []
+
+
+NON_RESTAURANT_KEYWORDS = ["구내식당", "사업소", "관리사무소", "복지시설", "편의시설", "자전거도로", "휴게소"]
+
+
+def is_non_restaurant(name: str, category: str) -> bool:
+    text = f"{name} {category}"
+    return any(keyword in text for keyword in NON_RESTAURANT_KEYWORDS)
 
 
 def format_kakao_place(place: dict[str, Any]) -> dict[str, str]:
@@ -555,12 +563,20 @@ def search_jamsil_food(place: str, condition: str, cuisine: str | None = None) -
     ]
     radius = 1500
 
-    documents = search_kakao_local(kakao_query, coord["lat"], coord["lon"], radius=radius)
+    documents = search_kakao_local(kakao_query, coord["lat"], coord["lon"], radius=radius, limit=15)
+    documents = [
+        doc for doc in documents
+        if not is_non_restaurant(doc.get("place_name", ""), doc.get("category_name", ""))
+    ]
     if documents:
         restaurants = [format_kakao_place(doc) for doc in documents[:5]]
         source = "kakao_local"
     else:
-        items = search_naver_local_multi(naver_queries)
+        items = search_naver_local_multi(naver_queries, limit=15)
+        items = [
+            item for item in items
+            if not is_non_restaurant(item.get("title", ""), item.get("category", ""))
+        ]
         restaurants = [format_naver_place(item) for item in items[:5]]
         source = "naver_local" if restaurants else "no_results"
 
@@ -623,6 +639,17 @@ def recommend_jamsil_food(
             condition = "인기 음식"
         else:
             condition = "든든한 식사" if selected_place == "inside" else "경기 전"
+
+    if selected_place == "outside" and not selected_cuisine:
+        return {
+            "tool_name": "recommend_jamsil_food",
+            "source": "need_cuisine",
+            "place": selected_place,
+            "condition": condition,
+            "cuisine": None,
+            "restaurants": [],
+            "notice": "한식/일식/양식/중식/기타 중 어떤 음식을 원하시는지 먼저 물어봐 주세요. 사용자가 답하면 그 음식 종류로 이 도구를 다시 호출해야 합니다.",
+        }
 
     if selected_place == "outside" and not (KAKAO_REST_API_KEY or (NAVER_CLIENT_ID and NAVER_CLIENT_SECRET)):
         return {
