@@ -6,6 +6,7 @@ import re
 import sqlite3
 import urllib.parse
 import urllib.request
+from html import unescape
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -27,10 +28,12 @@ FRONTEND_DIR = APP_DIR / "frontend"
 DATA_DIR = APP_DIR / "data"
 DB_PATH = DATA_DIR / "lg_twins_schedule.db"
 LG_API_URL = "https://www.lgtwins.com/api/game/getGame"
+NAVER_LOCAL_SEARCH_URL = "https://openapi.naver.com/v1/search/local.json"
 BOOKING_LINK = "https://ticket.interpark.com"
 KST = timezone(timedelta(hours=9), name="KST")
 DEFAULT_MODEL = os.getenv("OPENAI_DEFAULT_MODEL", "gpt-4o-mini")
 
+# 로컬 실행 시 backend/.env에서 OpenAI API Key와 모델 설정을 불러옵니다.
 load_dotenv(APP_DIR / "backend" / ".env", override=True)
 DEFAULT_MODEL = os.getenv("OPENAI_DEFAULT_MODEL", DEFAULT_MODEL)
 
@@ -43,6 +46,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# OPENAI_API_KEY가 설정되어 있으면 OpenAI API와 통신할 Client를 생성합니다.
 client = OpenAI() if os.getenv("OPENAI_API_KEY") else None
 
 STADIUM_COORDS = {
@@ -384,12 +388,15 @@ def recommend_outfit_by_weather(game_date: str | None = None, query: str = "") -
     game = schedule["games"][0]
     coord = stadium_coord(game["stadium"])
     url = (
+        # Open-Meteo API URL을 경기장 좌표와 일별 예보 항목으로 구성합니다.
         "https://api.open-meteo.com/v1/forecast"
         f"?latitude={coord['lat']}&longitude={coord['lon']}"
         "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum"
         "&timezone=Asia%2FSeoul"
     )
+    # Open-Meteo API를 호출해 경기 날짜에 해당하는 날씨 JSON을 가져옵니다.
     with urllib.request.urlopen(url, timeout=10) as response:
+        # API 응답 문자열을 Python dict로 파싱합니다.
         daily = json.loads(response.read().decode("utf-8"))["daily"]
     if target_date not in daily["time"]:
         return {
@@ -418,107 +425,79 @@ def recommend_outfit_by_weather(game_date: str | None = None, query: str = "") -
     }
 
 
-FOOD_JSON_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "restaurants": {
-            "type": "array",
-            "minItems": 5,
-            "maxItems": 5,
-            "items": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "menu": {"type": "string"},
-                    "location": {"type": "string"},
-                    "reason": {"type": "string"},
-                },
-                "required": ["name", "menu", "location", "reason"],
-                "additionalProperties": False,
-            },
-        },
-        "notice": {"type": "string"},
-    },
-    "required": ["restaurants", "notice"],
-    "additionalProperties": False,
-}
+def clean_naver_text(value: str) -> str:
+    text = re.sub(r"</?b>", "", value or "")
+    text = re.sub(r"<[^>]+>", "", text)
+    return unescape(text).strip()
 
 
-def is_placeholder_restaurant(item: dict[str, Any]) -> bool:
-    text = " ".join(str(item.get(key, "")) for key in ["name", "menu", "location", "reason"])
-    placeholder_patterns = [
-        r"맛집\s*\d+",
-        r"음식점\s*\d+",
-        r"restaurant\s*\d+",
-        r"메뉴\s*\d+",
-        r"menu\s*\d+",
-        r"이름\s*\d+",
-        r"상호명",
-        r"예시",
-        r"placeholder",
-    ]
-    return any(re.search(pattern, text, re.IGNORECASE) for pattern in placeholder_patterns)
+def build_food_query(place: str, condition: str, query: str) -> str:
+    compact = re.sub(r"\s+", "", query)
+    food_keywords = ["치킨", "떡볶이", "핫도그", "피자", "버거", "냉면", "고기", "삼겹살", "순대", "분식", "카페"]
+    selected_food = next((word for word in food_keywords if word in compact), "")
+
+    if place == "inside":
+        base = "잠실야구장 내부 먹거리"
+    elif condition == "경기 후":
+        base = "잠실새내역 맛집"
+    else:
+        base = "잠실야구장 근처 맛집"
+
+    return f"{base} {selected_food}".strip()
 
 
-def validate_food_results(restaurants: list[dict[str, Any]]) -> None:
-    if len(restaurants) != 5:
-        raise ValueError("검색 결과가 5개가 아닙니다.")
-    bad_items = [item for item in restaurants if is_placeholder_restaurant(item)]
-    if bad_items:
-        names = ", ".join(item.get("name", "이름 없음") for item in bad_items)
-        raise ValueError(f"실제 음식점이 아닌 placeholder 결과가 포함됐습니다: {names}")
-
-
-def search_jamsil_food_with_openai(place: str, condition: str, query: str) -> dict[str, Any] | None:
-    if client is None:
+def search_jamsil_food_with_naver(place: str, condition: str, query: str) -> dict[str, Any] | None:
+    client_id = os.getenv("NAVER_CLIENT_ID")
+    client_secret = os.getenv("NAVER_CLIENT_SECRET")
+    if not client_id or not client_secret:
         return None
 
-    place_label = "잠실야구장 내부" if place == "inside" else "잠실야구장 주변"
-    prompt = f"""
-잠실야구장 직관 관객에게 추천할 음식점 또는 먹거리를 최신 웹 검색으로 확인해서 정확히 5개 추천해줘.
-
-사용자 질문: {query}
-장소 조건: {place_label}
-상황/분류: {condition}
-
-조건:
-- 실제 검색으로 확인 가능한 음식점/매장 이름을 name에 넣어줘.
-- "잠실동 맛집 1", "메뉴1", "음식점 2" 같은 placeholder는 절대 쓰지 마.
-- 5개를 찾지 못하면 가짜로 채우지 말고, 검색으로 확인한 실제 상호명만 사용해.
-- 실제 방문자가 이해하기 쉽게 대표 메뉴, 위치/거리, 추천 이유를 써줘.
-- 내부 매장은 입점 여부가 바뀔 수 있음을 notice에 포함해.
-- 주변 맛집은 잠실야구장 또는 잠실새내역 기준으로 설명해.
-- 모르면 단정하지 말고 확인 필요하다고 써줘.
-"""
-    response = client.responses.create(
-        model=DEFAULT_MODEL,
-        input=prompt,
-        tools=[{"type": "web_search_preview"}],
-        text={
-            "format": {
-                "type": "json_schema",
-                "name": "food_recommendations",
-                "schema": FOOD_JSON_SCHEMA,
-                "strict": True,
-            }
+    search_query = build_food_query(place, condition, query)
+    params = urllib.parse.urlencode({"query": search_query, "display": 5, "start": 1, "sort": "comment"})
+    request = urllib.request.Request(
+        f"{NAVER_LOCAL_SEARCH_URL}?{params}",
+        headers={
+            "X-Naver-Client-Id": client_id,
+            "X-Naver-Client-Secret": client_secret,
         },
-        temperature=0.2,
-        max_output_tokens=900,
+        method="GET",
     )
-    parsed = json.loads(response.output_text)
-    validate_food_results(parsed["restaurants"])
+    # 네이버 지역 검색 API를 호출해 실제 등록된 음식점/매장 검색 결과를 가져옵니다.
+    with urllib.request.urlopen(request, timeout=10) as response:
+        # 네이버 API 응답 JSON을 Python dict로 파싱합니다.
+        payload = json.loads(response.read().decode("utf-8"))
+
+    restaurants = []
+    for item in payload.get("items", []):
+        name = clean_naver_text(item.get("title", ""))
+        category = clean_naver_text(item.get("category", ""))
+        road_address = clean_naver_text(item.get("roadAddress", ""))
+        address = clean_naver_text(item.get("address", ""))
+        if not name:
+            continue
+        restaurants.append(
+            {
+                "name": name,
+                "menu": category or "대표 메뉴는 방문 전 확인 필요",
+                "location": road_address or address or "위치 정보 확인 필요",
+                "reason": f"'{search_query}' 네이버 지역 검색 결과입니다. 경기 전후 방문 전 영업시간과 대기 여부를 확인해 주세요.",
+                "link": item.get("link", ""),
+            }
+        )
+
     return {
         "tool_name": "recommend_jamsil_food",
-        "source": "openai_web_search",
+        "source": "naver_local_search",
+        "query": search_query,
         "place": place,
         "condition": condition,
-        "restaurants": parsed["restaurants"],
-        "notice": parsed["notice"],
+        "restaurants": restaurants,
+        "notice": "네이버 지역 검색 결과입니다. 영업시간, 휴무, 입점 여부는 방문 전 네이버 지도에서 다시 확인해 주세요.",
     }
 
 
 # TOOL 4. 음식점 추천
-# 저장된 음식점 목록 없이 OpenAI 웹 검색으로 실제 음식점/매장 이름을 찾아 5개 추천합니다.
+# 저장된 음식점 목록 없이 네이버 지역 검색 API로 실제 음식점/매장 이름을 추천합니다.
 def recommend_jamsil_food(place: str | None = None, timing_or_category: str | None = None, query: str = "") -> dict[str, Any]:
     compact = re.sub(r"\s+", "", query)
     selected_place = place
@@ -539,7 +518,7 @@ def recommend_jamsil_food(place: str | None = None, timing_or_category: str | No
             condition = "든든한 식사" if selected_place == "inside" else "경기 전"
 
     try:
-        searched = search_jamsil_food_with_openai(selected_place, condition, query)
+        searched = search_jamsil_food_with_naver(selected_place, condition, query)
         if searched:
             return searched
     except Exception as exc:
@@ -549,7 +528,7 @@ def recommend_jamsil_food(place: str | None = None, timing_or_category: str | No
             "place": selected_place,
             "condition": condition,
             "restaurants": [],
-            "notice": f"실제 음식점 이름을 확인하는 검색이 충분하지 않았습니다. 잠시 후 다시 시도해 주세요. ({exc})",
+            "notice": f"네이버 지역 검색 중 문제가 생겼습니다. 잠시 후 다시 시도해 주세요. ({exc})",
         }
 
     return {
@@ -558,10 +537,11 @@ def recommend_jamsil_food(place: str | None = None, timing_or_category: str | No
         "place": selected_place,
         "condition": condition,
         "restaurants": [],
-        "notice": "음식점 추천은 OpenAI 웹 검색이 필요합니다. OPENAI_API_KEY를 설정한 뒤 다시 시도해 주세요.",
+        "notice": "음식점 추천은 NAVER_CLIENT_ID와 NAVER_CLIENT_SECRET 설정이 필요합니다.",
     }
 
 
+# GPT가 사용자 질문에 맞는 기능을 고를 수 있도록 Tool 목록을 정의합니다.
 TOOLS = [
     {
         "type": "function",
@@ -638,7 +618,7 @@ SYSTEM_PROMPT = """
 이번 주, 다음 주, 오늘 같은 상대 날짜 표현은 오늘 날짜를 기준으로 해석해.
 예매 방법은 사용자가 예매, 티켓, 인터파크, 결제, 입장권처럼 예매 관련 키워드를 말했을 때만 안내해.
 좌석, 자리, 내야, 외야, 응원석 질문은 좌석 선택 팁 중심으로 답하고 예매 절차는 덧붙이지 마.
-음식점 질문은 recommend_jamsil_food 도구를 사용해 검색 기반으로 5개를 추천해.
+음식점 질문은 recommend_jamsil_food 도구를 사용해 네이버 지역 검색 결과를 추천해.
 대화 기록을 참고하되, 앱이 종료되면 기록은 사라지는 임시 기억이라고 생각해.
 """
 
@@ -713,6 +693,7 @@ def chat(request: ChatRequest):
     messages.append({"role": "user", "content": f"{message}\n\n[현재 날짜: {datetime.now(KST).date().isoformat()} / 시간대: KST]"})
 
     try:
+        # GPT가 대화 내용과 Tool 목록을 보고 필요한 Tool을 선택합니다.
         first = client.responses.create(
             model=DEFAULT_MODEL,
             input=messages,
@@ -729,6 +710,7 @@ def chat(request: ChatRequest):
         last_tool_name = None
         last_tool_result = None
         for call in function_calls:
+            # GPT가 선택한 Tool 이름과 인자를 실제 Python 함수로 실행합니다.
             args = json.loads(call.arguments or "{}")
             last_tool_name = call.name
             last_tool_result = TOOL_HANDLERS[call.name](**args)
@@ -740,6 +722,7 @@ def chat(request: ChatRequest):
                 }
             )
 
+        # Tool 실행 결과를 다시 GPT에 전달해 사용자에게 보여줄 최종 답변을 만듭니다.
         final = client.responses.create(
             model=DEFAULT_MODEL,
             previous_response_id=first.id,
