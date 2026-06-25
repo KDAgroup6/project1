@@ -446,14 +446,13 @@ def build_food_query(place: str, condition: str, query: str) -> str:
     return f"{base} {selected_food}".strip()
 
 
-def search_jamsil_food_with_naver(place: str, condition: str, query: str) -> dict[str, Any] | None:
+def fetch_naver_local_items(query: str) -> list[dict[str, str]]:
     client_id = os.getenv("NAVER_CLIENT_ID")
     client_secret = os.getenv("NAVER_CLIENT_SECRET")
     if not client_id or not client_secret:
-        return None
+        raise RuntimeError("NAVER_CLIENT_ID와 NAVER_CLIENT_SECRET 설정이 필요합니다.")
 
-    search_query = build_food_query(place, condition, query)
-    params = urllib.parse.urlencode({"query": search_query, "display": 5, "start": 1, "sort": "comment"})
+    params = urllib.parse.urlencode({"query": query, "display": 5, "start": 1, "sort": "comment"})
     request = urllib.request.Request(
         f"{NAVER_LOCAL_SEARCH_URL}?{params}",
         headers={
@@ -466,25 +465,59 @@ def search_jamsil_food_with_naver(place: str, condition: str, query: str) -> dic
     with urllib.request.urlopen(request, timeout=10) as response:
         # 네이버 API 응답 JSON을 Python dict로 파싱합니다.
         payload = json.loads(response.read().decode("utf-8"))
+    return payload.get("items", [])
+
+
+def search_restaurant(query: str) -> str:
+    """
+    OpenAI가 recommend_jamsil_food Tool을 선택하면 내부에서 실행되는 네이버 지역 검색 함수입니다.
+    예: '강남 맛집', '홍대 이탈리안 맛집', '부산 해물탕'
+    """
+    items = fetch_naver_local_items(query)
+
+    if not items:
+        return "맛집 정보를 찾을 수 없습니다."
+
+    results = []
+    for i, item in enumerate(items, 1):
+        title = clean_naver_text(item.get("title", ""))
+        address = clean_naver_text(item.get("roadAddress") or item.get("address", "정보없음"))
+        category = clean_naver_text(item.get("category", "정보없음"))
+        telephone = clean_naver_text(item.get("telephone", "정보없음")) or "정보없음"
+        results.append(
+            f"{i}. {title}\n"
+            f"   주소: {address}\n"
+            f"   카테고리: {category}\n"
+            f"   전화: {telephone}"
+        )
+    return "\n\n".join(results)
+
+
+def search_jamsil_food_with_naver(place: str, condition: str, query: str) -> dict[str, Any]:
+    search_query = build_food_query(place, condition, query)
+    items = fetch_naver_local_items(search_query)
 
     restaurants = []
-    for item in payload.get("items", []):
+    for item in items:
         name = clean_naver_text(item.get("title", ""))
         category = clean_naver_text(item.get("category", ""))
         road_address = clean_naver_text(item.get("roadAddress", ""))
         address = clean_naver_text(item.get("address", ""))
+        telephone = clean_naver_text(item.get("telephone", "정보없음")) or "정보없음"
         if not name:
             continue
         restaurants.append(
             {
                 "name": name,
-                "menu": category or "대표 메뉴는 방문 전 확인 필요",
+                "menu": category or "카테고리 정보 없음",
                 "location": road_address or address or "위치 정보 확인 필요",
-                "reason": f"'{search_query}' 네이버 지역 검색 결과입니다. 경기 전후 방문 전 영업시간과 대기 여부를 확인해 주세요.",
+                "reason": f"'{search_query}' 네이버 지역 검색 결과입니다. 전화: {telephone}",
                 "link": item.get("link", ""),
+                "telephone": telephone,
             }
         )
 
+    formatted = search_restaurant(search_query)
     return {
         "tool_name": "recommend_jamsil_food",
         "source": "naver_local_search",
@@ -492,12 +525,13 @@ def search_jamsil_food_with_naver(place: str, condition: str, query: str) -> dic
         "place": place,
         "condition": condition,
         "restaurants": restaurants,
+        "formatted": formatted,
         "notice": "네이버 지역 검색 결과입니다. 영업시간, 휴무, 입점 여부는 방문 전 네이버 지도에서 다시 확인해 주세요.",
     }
 
 
 # TOOL 4. 음식점 추천
-# 저장된 음식점 목록 없이 네이버 지역 검색 API로 실제 음식점/매장 이름을 추천합니다.
+# OpenAI가 음식점 질문이라고 판단해 이 Tool을 선택하면 네이버 지역 검색 API로 실제 매장을 찾습니다.
 def recommend_jamsil_food(place: str | None = None, timing_or_category: str | None = None, query: str = "") -> dict[str, Any]:
     compact = re.sub(r"\s+", "", query)
     selected_place = place
@@ -519,8 +553,7 @@ def recommend_jamsil_food(place: str | None = None, timing_or_category: str | No
 
     try:
         searched = search_jamsil_food_with_naver(selected_place, condition, query)
-        if searched:
-            return searched
+        return searched
     except Exception as exc:
         return {
             "tool_name": "recommend_jamsil_food",
@@ -585,7 +618,7 @@ TOOLS = [
     {
         "type": "function",
         "name": "recommend_jamsil_food",
-        "description": "잠실야구장 내부 음식점 또는 경기장 주변 맛집을 추천합니다.",
+        "description": "음식점, 맛집, 간식 질문을 받으면 이 도구를 선택합니다. 네이버 지역 검색 API로 잠실야구장 내부 또는 주변 실제 매장을 검색해 추천합니다.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -663,6 +696,8 @@ def local_answer(tool_name: str, tool_result: dict[str, Any]) -> str:
     restaurants = tool_result.get("restaurants", [])
     if not restaurants:
         return tool_result.get("notice", "음식점 검색 결과가 없습니다. 잠시 후 다시 시도해 주세요.")
+    if tool_result.get("formatted"):
+        return f"{tool_result['formatted']}\n\n{tool_result['notice']}"
     lines = [
         f"{item['name']} - {item['menu']} ({item['location']})\n추천 이유: {item['reason']}"
         for item in restaurants
