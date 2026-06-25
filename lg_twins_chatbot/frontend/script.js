@@ -1,6 +1,5 @@
 const API_URL = "/api/chat";
 const DATES_URL = "/api/calendar-dates";
-const HISTORY_KEY = "twinsbot_chat_history";
 
 const form = document.getElementById("chat-form");
 const input = document.getElementById("message");
@@ -56,32 +55,6 @@ function addBubble(text, sender, extraClass = "") {
   log.appendChild(bubble);
   log.scrollTop = log.scrollHeight;
   return bubble;
-}
-
-function saveHistory() {
-  sessionStorage.setItem(HISTORY_KEY, JSON.stringify(history));
-}
-
-function loadHistory() {
-  try {
-    history = JSON.parse(sessionStorage.getItem(HISTORY_KEY) || "[]");
-  } catch (error) {
-    history = [];
-  }
-}
-
-function renderSavedHistory() {
-  if (!history.length) {
-    addBubble(
-      "안녕하세요. 일정, 예매, 경기 날씨에 맞는 복장, 잠실 먹거리까지 한 번에 도와드릴게요.",
-      "bot"
-    );
-    return;
-  }
-
-  history.forEach((turn) => {
-    addBubble(turn.content, turn.role === "user" ? "user" : "bot");
-  });
 }
 
 function addActionLink(url, label) {
@@ -232,7 +205,6 @@ async function sendMessage(message) {
     }
     history.push({ role: "user", content: trimmed });
     history.push({ role: "assistant", content: data.answer });
-    saveHistory();
     toolName.textContent = TOOL_LABELS[data.tool] || "일반 답변";
     setResult(data);
   } catch (error) {
@@ -332,6 +304,21 @@ document.querySelectorAll("[data-prompt]").forEach((button) => {
   button.addEventListener("click", () => sendMessage(button.dataset.prompt));
 });
 
-loadHistory();
-renderSavedHistory();
+const todayLabel = (() => {
+  const now = new Date();
+  return `${now.getMonth() + 1}월 ${now.getDate()}일`;
+})();
+
+addBubble(
+  [
+    "안녕하세요. 트윈스봇입니다.",
+    "",
+    "이렇게 물어볼 수 있어요.",
+    "- 이번주 LG 경기 일정 알려줘",
+    `- ${todayLabel} 경기 복장 추천해줘`,
+    "- LG 트윈스 예매 방법 알려줘",
+    "- 경기 끝나고 잠실 맛집 추천해줘",
+  ].join("\n"),
+  "bot"
+);
 loadCalendarDates();

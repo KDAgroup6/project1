@@ -45,8 +45,6 @@ uvicorn backend.main:app --host 0.0.0.0 --port $PORT
 ```text
 OPENAI_API_KEY=발급받은 키
 OPENAI_DEFAULT_MODEL=gpt-4o-mini
-NAVER_CLIENT_ID=네이버 개발자센터 Client ID
-NAVER_CLIENT_SECRET=네이버 개발자센터 Client Secret
 ```
 
 배포가 끝나면 Render가 만들어준 `https://...onrender.com` 주소를 발표 때 공유하면 됩니다.
@@ -55,7 +53,7 @@ NAVER_CLIENT_SECRET=네이버 개발자센터 Client Secret
 
 - `.env` 파일은 GitHub에 올리지 마세요. 키는 배포 서비스의 Environment Variables에만 넣습니다.
 - 무료 서버는 처음 접속할 때 잠깐 느릴 수 있습니다.
-- OpenAI API와 네이버 지역 검색 API를 쓰므로 발표 장소 인터넷 연결이 필요합니다.
+- OpenAI API를 쓰므로 발표 장소 인터넷 연결이 필요합니다.
 
 ## 같은 네트워크에서 같이 접속하기
 
@@ -83,7 +81,7 @@ python -m venv .venv
 copy .\backend\.env.example .\backend\.env
 ```
 
-`.env`에 `OPENAI_API_KEY`, `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`을 입력한 뒤 실행합니다.
+`.env`에 `OPENAI_API_KEY`를 입력한 뒤 실행합니다.
 
 ```powershell
 .\.venv\Scripts\uvicorn.exe backend.main:app --host 127.0.0.1 --port 8000
