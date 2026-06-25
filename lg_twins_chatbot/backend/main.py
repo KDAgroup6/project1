@@ -476,7 +476,7 @@ def search_jamsil_food_with_openai(place: str, condition: str, query: str, cuisi
     place_label = "잠실야구장 내부" if place == "inside" else "잠실야구장 주변"
     cuisine_line = f"음식 종류: {cuisine}" if cuisine else "음식 종류: 특별한 선호 없음"
     prompt = f"""
-잠실야구장 직관 관객에게 추천할 음식점 또는 먹거리를 최신 웹 검색으로 확인해서 최대 5개까지 추천해줘.
+잠실야구장 직관 관객에게 추천할 음식점 또는 먹거리를 최신 웹 검색으로 확인해서 추천해줘.
 
 사용자 질문: {query}
 장소 조건: {place_label}
@@ -484,9 +484,11 @@ def search_jamsil_food_with_openai(place: str, condition: str, query: str, cuisi
 {cuisine_line}
 
 조건:
+- 가능하면 서로 다른 음식점 3~5개를 찾아서 추천해. 검색을 충분히 해보고 1~2개만 내놓지 말 것.
+- 정말 검색해도 조건에 맞는 곳이 1~2개뿐이면 그만큼만 정직하게 답해도 되지만, 먼저 3개 이상을 찾으려고 시도해.
 - 실제 검색으로 확인 가능한 음식점/매장 이름을 name에 넣어줘.
 - "잠실동 맛집 1", "메뉴1", "음식점 2" 같은 placeholder는 절대 쓰지 마.
-- 5개를 찾지 못하면 가짜로 채우지 말고, 검색으로 확인한 실제 상호명만 사용해.
+- 개수를 채우려고 가짜로 채우지 말고, 검색으로 확인한 실제 상호명만 사용해.
 - 음식 종류가 지정된 경우, 해당 종류(한식/일식/양식/중식/기타 등)에 맞는 곳만 추천해.
 - 실제 방문자가 이해하기 쉽게 대표 메뉴, 위치/거리, 추천 이유를 써줘.
 - 내부 매장은 입점 여부가 바뀔 수 있음을 notice에 포함해.
