@@ -319,15 +319,18 @@ def format_game(row: sqlite3.Row) -> str:
     return "\n".join(lines)
 
 
+# TOOL 1. 경기 일정 조회
+# LG 트윈스 일정 DB에서 날짜/이번 주/주말 조건에 맞는 경기 정보를 찾아 챗봇에 넘깁니다.
 def get_lg_twins_schedule(query: str = "", game_date: str | None = None) -> dict[str, Any]:
     create_table()
     target_date = game_date or parse_date(query)
     today = datetime.now(KST).date()
+    compact_query = re.sub(r"\s+", "", query)
 
-    if "주말" in query:
+    if "주말" in compact_query:
         start = today + timedelta(days=(5 - today.weekday()) % 7)
         end = start + timedelta(days=1)
-    elif "이번주" in query:
+    elif "이번주" in compact_query:
         start = today - timedelta(days=today.weekday())
         end = start + timedelta(days=6)
     elif target_date:
@@ -368,6 +371,8 @@ def get_lg_twins_schedule(query: str = "", game_date: str | None = None) -> dict
     }
 
 
+# TOOL 2. 예매/좌석 안내
+# 예매 키워드가 있으면 예매 단계를, 좌석 키워드가 있으면 좌석 추천용 데이터를 반환합니다.
 def get_booking_intent(topic: str) -> str:
     compact = re.sub(r"\s+", "", topic)
     has_booking = any(word in compact for word in ["예매", "티켓", "인터파크", "결제", "입장권", "예약"])
@@ -408,6 +413,8 @@ def stadium_coord(stadium: str) -> dict[str, float]:
     return STADIUM_COORDS["잠실야구장"]
 
 
+# TOOL 3. 날씨 기반 복장 추천
+# 선택한 경기장의 Open-Meteo 예보를 가져오고, 기온/강수확률에 맞는 복장을 추천합니다.
 def recommend_outfit_locally(weather: dict[str, Any]) -> str:
     avg = weather["average_temperature"]
     rain = weather["precipitation_probability"]
@@ -474,6 +481,78 @@ def recommend_outfit_by_weather(game_date: str | None = None, query: str = "") -
     }
 
 
+FOOD_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "restaurants": {
+            "type": "array",
+            "minItems": 5,
+            "maxItems": 5,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "menu": {"type": "string"},
+                    "location": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["name", "menu", "location", "reason"],
+                "additionalProperties": False,
+            },
+        },
+        "notice": {"type": "string"},
+    },
+    "required": ["restaurants", "notice"],
+    "additionalProperties": False,
+}
+
+
+def search_jamsil_food_with_openai(place: str, condition: str, query: str) -> dict[str, Any] | None:
+    if client is None:
+        return None
+
+    place_label = "잠실야구장 내부" if place == "inside" else "잠실야구장 주변"
+    prompt = f"""
+잠실야구장 직관 관객에게 추천할 음식점 또는 먹거리를 최신 검색으로 확인해서 정확히 5개 추천해줘.
+
+사용자 질문: {query}
+장소 조건: {place_label}
+상황/분류: {condition}
+
+조건:
+- 실제 방문자가 이해하기 쉽게 음식점명, 대표 메뉴, 위치/거리, 추천 이유를 써줘.
+- 내부 매장은 입점 여부가 바뀔 수 있음을 notice에 포함해.
+- 주변 맛집은 잠실야구장 또는 잠실새내역 기준으로 설명해.
+- 모르면 단정하지 말고 확인 필요하다고 써줘.
+"""
+    response = client.responses.create(
+        model=DEFAULT_MODEL,
+        input=prompt,
+        tools=[{"type": "web_search_preview"}],
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "food_recommendations",
+                "schema": FOOD_JSON_SCHEMA,
+                "strict": True,
+            }
+        },
+        temperature=0.2,
+        max_output_tokens=900,
+    )
+    parsed = json.loads(response.output_text)
+    return {
+        "tool_name": "recommend_jamsil_food",
+        "source": "openai_web_search",
+        "place": place,
+        "condition": condition,
+        "restaurants": parsed["restaurants"],
+        "notice": parsed["notice"],
+    }
+
+
+# TOOL 4. 음식점 추천
+# OpenAI 웹 검색으로 잠실야구장 내/외부 먹거리를 5개 추천하고, 실패하면 기본 데이터로 대체합니다.
 def recommend_jamsil_food(place: str | None = None, timing_or_category: str | None = None, query: str = "") -> dict[str, Any]:
     compact = re.sub(r"\s+", "", query)
     selected_place = place
@@ -493,13 +572,32 @@ def recommend_jamsil_food(place: str | None = None, timing_or_category: str | No
         else:
             condition = "든든한 식사" if selected_place == "inside" else "경기 전"
 
+    try:
+        searched = search_jamsil_food_with_openai(selected_place, condition, query)
+        if searched:
+            return searched
+    except Exception:
+        pass
+
     matches = [
         restaurant
         for restaurant in RESTAURANTS
         if restaurant["place"] == selected_place and restaurant["condition"] == condition
-    ][:3]
+    ]
+    if len(matches) < 5:
+        extra = [
+            restaurant
+            for restaurant in RESTAURANTS
+            if restaurant["place"] == selected_place and restaurant not in matches
+        ]
+        matches.extend(extra)
+    if len(matches) < 5:
+        extra = [restaurant for restaurant in RESTAURANTS if restaurant not in matches]
+        matches.extend(extra)
+    matches = matches[:5]
     return {
         "tool_name": "recommend_jamsil_food",
+        "source": "local_fallback",
         "place": selected_place,
         "condition": condition,
         "restaurants": matches,
@@ -576,10 +674,13 @@ TOOL_HANDLERS = {
 
 SYSTEM_PROMPT = """
 너는 LG 트윈스 직관 준비를 도와주는 대화형 챗봇 '트윈스봇'이야.
+오늘 날짜는 {today}이고, 시간대는 한국 시간(KST)이야.
 사용자의 질문을 보고 필요한 도구를 골라 경기 일정, 예매, 날씨 기반 복장, 잠실 먹거리를 안내해.
 답변은 한국어로 짧고 친절하게 작성하고, 모르는 정보는 확정하지 말고 공식 확인이 필요하다고 말해.
+이번 주, 다음 주, 오늘 같은 상대 날짜 표현은 오늘 날짜를 기준으로 해석해.
 예매 방법은 사용자가 예매, 티켓, 인터파크, 결제, 입장권처럼 예매 관련 키워드를 말했을 때만 안내해.
 좌석, 자리, 내야, 외야, 응원석 질문은 좌석 선택 팁 중심으로 답하고 예매 절차는 덧붙이지 마.
+음식점 질문은 recommend_jamsil_food 도구를 사용해 검색 기반으로 5개를 추천해.
 대화 기록을 참고하되, 앱이 종료되면 기록은 사라지는 임시 기억이라고 생각해.
 """
 
@@ -647,7 +748,8 @@ def chat(request: ChatRequest):
         tool_result = TOOL_HANDLERS[tool_name](**args)
         return {"answer": local_answer(tool_name, tool_result), "tool": tool_name, "tool_result": tool_result, "link": BOOKING_LINK}
 
-    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    system_prompt = SYSTEM_PROMPT.format(today=datetime.now(KST).date().isoformat())
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
     for turn in request.history[-12:]:
         messages.append({"role": turn.role, "content": turn.content})
     messages.append({"role": "user", "content": message})
