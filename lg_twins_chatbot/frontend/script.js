@@ -304,8 +304,21 @@ document.querySelectorAll("[data-prompt]").forEach((button) => {
   button.addEventListener("click", () => sendMessage(button.dataset.prompt));
 });
 
+const todayLabel = (() => {
+  const now = new Date();
+  return `${now.getMonth() + 1}월 ${now.getDate()}일`;
+})();
+
 addBubble(
-  "안녕하세요. 일정, 예매, 경기 날씨에 맞는 복장, 잠실 먹거리까지 한 번에 도와드릴게요.",
+  [
+    "안녕하세요. 트윈스봇입니다.",
+    "",
+    "이렇게 물어볼 수 있어요.",
+    "- 이번주 LG 경기 일정 알려줘",
+    `- ${todayLabel} 경기 복장 추천해줘`,
+    "- LG 트윈스 예매 방법 알려줘",
+    "- 경기 끝나고 잠실 맛집 추천해줘",
+  ].join("\n"),
   "bot"
 );
 loadCalendarDates();

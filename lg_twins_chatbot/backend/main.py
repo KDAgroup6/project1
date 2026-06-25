@@ -423,7 +423,7 @@ FOOD_JSON_SCHEMA = {
     "properties": {
         "restaurants": {
             "type": "array",
-            "minItems": 5,
+            "minItems": 1,
             "maxItems": 5,
             "items": {
                 "type": "object",
@@ -461,30 +461,33 @@ def is_placeholder_restaurant(item: dict[str, Any]) -> bool:
 
 
 def validate_food_results(restaurants: list[dict[str, Any]]) -> None:
-    if len(restaurants) != 5:
-        raise ValueError("검색 결과가 5개가 아닙니다.")
+    if not restaurants:
+        raise ValueError("검색 결과가 없습니다.")
     bad_items = [item for item in restaurants if is_placeholder_restaurant(item)]
     if bad_items:
         names = ", ".join(item.get("name", "이름 없음") for item in bad_items)
         raise ValueError(f"실제 음식점이 아닌 placeholder 결과가 포함됐습니다: {names}")
 
 
-def search_jamsil_food_with_openai(place: str, condition: str, query: str) -> dict[str, Any] | None:
+def search_jamsil_food_with_openai(place: str, condition: str, query: str, cuisine: str | None = None) -> dict[str, Any] | None:
     if client is None:
         return None
 
     place_label = "잠실야구장 내부" if place == "inside" else "잠실야구장 주변"
+    cuisine_line = f"음식 종류: {cuisine}" if cuisine else "음식 종류: 특별한 선호 없음"
     prompt = f"""
-잠실야구장 직관 관객에게 추천할 음식점 또는 먹거리를 최신 웹 검색으로 확인해서 정확히 5개 추천해줘.
+잠실야구장 직관 관객에게 추천할 음식점 또는 먹거리를 최신 웹 검색으로 확인해서 최대 5개까지 추천해줘.
 
 사용자 질문: {query}
 장소 조건: {place_label}
 상황/분류: {condition}
+{cuisine_line}
 
 조건:
 - 실제 검색으로 확인 가능한 음식점/매장 이름을 name에 넣어줘.
 - "잠실동 맛집 1", "메뉴1", "음식점 2" 같은 placeholder는 절대 쓰지 마.
 - 5개를 찾지 못하면 가짜로 채우지 말고, 검색으로 확인한 실제 상호명만 사용해.
+- 음식 종류가 지정된 경우, 해당 종류(한식/일식/양식/중식/기타 등)에 맞는 곳만 추천해.
 - 실제 방문자가 이해하기 쉽게 대표 메뉴, 위치/거리, 추천 이유를 써줘.
 - 내부 매장은 입점 여부가 바뀔 수 있음을 notice에 포함해.
 - 주변 맛집은 잠실야구장 또는 잠실새내역 기준으로 설명해.
@@ -512,17 +515,42 @@ def search_jamsil_food_with_openai(place: str, condition: str, query: str) -> di
         "source": "openai_web_search",
         "place": place,
         "condition": condition,
+        "cuisine": cuisine,
         "restaurants": parsed["restaurants"],
         "notice": parsed["notice"],
     }
 
 
+CUISINE_KEYWORDS = {
+    "한식": ["한식", "한정식", "국밥", "찌개", "백반", "고기", "삼겹살"],
+    "일식": ["일식", "초밥", "스시", "라멘", "돈카츠", "우동"],
+    "양식": ["양식", "파스타", "피자", "스테이크", "버거"],
+    "중식": ["중식", "짜장", "짬뽕", "탕수육", "마라"],
+}
+
+
+def detect_cuisine(query: str) -> str | None:
+    compact = re.sub(r"\s+", "", query)
+    for cuisine, keywords in CUISINE_KEYWORDS.items():
+        if any(word in compact for word in keywords):
+            return cuisine
+    if any(word in compact for word in ["기타", "상관없", "아무거나"]):
+        return "기타"
+    return None
+
+
 # TOOL 4. 음식점 추천
 # 저장된 음식점 목록 없이 OpenAI 웹 검색으로 실제 음식점/매장 이름을 찾아 5개 추천합니다.
-def recommend_jamsil_food(place: str | None = None, timing_or_category: str | None = None, query: str = "") -> dict[str, Any]:
+def recommend_jamsil_food(
+    place: str | None = None,
+    timing_or_category: str | None = None,
+    query: str = "",
+    cuisine: str | None = None,
+) -> dict[str, Any]:
     compact = re.sub(r"\s+", "", query)
     selected_place = place
     condition = timing_or_category
+    selected_cuisine = cuisine or detect_cuisine(query)
 
     if not selected_place:
         selected_place = "outside" if any(word in compact for word in ["근처", "주변", "밖", "경기전", "경기후"]) else "inside"
@@ -539,7 +567,7 @@ def recommend_jamsil_food(place: str | None = None, timing_or_category: str | No
             condition = "든든한 식사" if selected_place == "inside" else "경기 전"
 
     try:
-        searched = search_jamsil_food_with_openai(selected_place, condition, query)
+        searched = search_jamsil_food_with_openai(selected_place, condition, query, selected_cuisine)
         if searched:
             return searched
     except Exception as exc:
@@ -548,6 +576,7 @@ def recommend_jamsil_food(place: str | None = None, timing_or_category: str | No
             "source": "search_error",
             "place": selected_place,
             "condition": condition,
+            "cuisine": selected_cuisine,
             "restaurants": [],
             "notice": f"실제 음식점 이름을 확인하는 검색이 충분하지 않았습니다. 잠시 후 다시 시도해 주세요. ({exc})",
         }
@@ -557,6 +586,7 @@ def recommend_jamsil_food(place: str | None = None, timing_or_category: str | No
         "source": "search_unavailable",
         "place": selected_place,
         "condition": condition,
+        "cuisine": selected_cuisine,
         "restaurants": [],
         "notice": "음식점 추천은 OpenAI 웹 검색이 필요합니다. OPENAI_API_KEY를 설정한 뒤 다시 시도해 주세요.",
     }
@@ -614,9 +644,14 @@ TOOLS = [
                     "type": ["string", "null"],
                     "description": "경기 전, 경기 후, 든든한 식사, 간단한 간식, 인기 음식 중 하나",
                 },
+                "cuisine": {
+                    "type": ["string", "null"],
+                    "enum": ["한식", "일식", "양식", "중식", "기타", None],
+                    "description": "사용자가 원하는 음식 종류. 사용자가 먼저 말하지 않았다면 도구를 호출하기 전에 반드시 한 번 물어봐야 함",
+                },
                 "query": {"type": "string", "description": "사용자의 음식 추천 질문 원문"},
             },
-            "required": ["place", "timing_or_category", "query"],
+            "required": ["place", "timing_or_category", "cuisine", "query"],
             "additionalProperties": False,
         },
     },
@@ -638,7 +673,8 @@ SYSTEM_PROMPT = """
 이번 주, 다음 주, 오늘 같은 상대 날짜 표현은 오늘 날짜를 기준으로 해석해.
 예매 방법은 사용자가 예매, 티켓, 인터파크, 결제, 입장권처럼 예매 관련 키워드를 말했을 때만 안내해.
 좌석, 자리, 내야, 외야, 응원석 질문은 좌석 선택 팁 중심으로 답하고 예매 절차는 덧붙이지 마.
-음식점 질문은 recommend_jamsil_food 도구를 사용해 검색 기반으로 5개를 추천해.
+음식점 질문을 받으면 사용자가 음식 종류(한식/일식/양식/중식/기타)를 아직 말하지 않았다면 도구를 호출하기 전에 먼저 그것부터 물어봐.
+음식 종류를 알게 되면 recommend_jamsil_food 도구를 사용해 검색 기반으로 5개를 추천해.
 대화 기록을 참고하되, 앱이 종료되면 기록은 사라지는 임시 기억이라고 생각해.
 """
 
@@ -648,7 +684,7 @@ def fallback_tool_for(message: str) -> tuple[str, dict[str, Any]]:
     if any(word in compact for word in ["날씨", "기온", "온도", "복장", "옷", "입고"]):
         return "recommend_outfit_by_weather", {"game_date": parse_date(message), "query": message}
     if any(word in compact for word in ["음식", "먹", "맛집", "간식", "치킨", "떡볶이", "핫도그"]):
-        return "recommend_jamsil_food", {"place": None, "timing_or_category": None, "query": message}
+        return "recommend_jamsil_food", {"place": None, "timing_or_category": None, "cuisine": None, "query": message}
     if any(word in compact for word in ["예매", "티켓", "좌석", "자리", "인터파크"]):
         return "guide_lg_twins_booking", {"topic": message}
     return "get_lg_twins_schedule", {"query": message, "game_date": parse_date(message)}
